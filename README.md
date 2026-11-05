@@ -94,6 +94,8 @@
 ### In-game settings
 Press **F1** in the game to change graphics, controls and sound (volume, output device, mute when the window is in the background). Most changes apply straight away.
 
+- **Date and Time:** play on your PC's clock, or pick your own date so weekday events come sooner. Days can also pass faster: set how many real minutes a game day lasts (1440 is a normal day, 20 makes a day pass every 20 minutes). Tick **Keep time passing while you are away** to let the game's clock keep running while the game is closed. Change it on the title screen, before you load your island.
+
 ## Quick start
 
 1. Download the zip from the [latest release](https://github.com/featureJosh/pokopia-recomp/releases/latest) and extract it anywhere.

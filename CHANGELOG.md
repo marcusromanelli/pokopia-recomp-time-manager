@@ -10,6 +10,10 @@ of the game (version 2.0.1a): the download contains no game files.
   view distance and texture sharpness they also pick a render scale and a frame limit (Steam Deck 40 fps, Legion Go S and
   Laptop 60 fps, Desktop your display's refresh rate). Hover a preset to see what it sets. Changing one of those settings
   afterwards switches to Custom, as before. The render scale part applies after a restart.
+- New Date and Time page in F1: keep your PC's clock, or set a custom date and the game's clock runs from it. A game day can
+  last anything from 1 to 1440 real minutes (Reset to default goes back to 24 hours), and "Keep time passing while you are away"
+  adds the time the game was closed at the clock's speed. It can be changed on the title screen, before you enter your island.
+  The settings are the `[clock]` section of controls.ini; where the clock was is kept in clock_state.ini next to it.
 
 ## 0.5.0 (build I: Iguana)
 
