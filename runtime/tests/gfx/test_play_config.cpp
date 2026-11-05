@@ -1916,3 +1916,41 @@ NXTEST(quality_preset_edit_makes_custom) {
     CHECK(!quality_preset_edited(d, QualityField::LodBias));
     CHECK_EQ(d.quality_preset, std::string("custom"));
 }
+
+// ---- [clock]: the F1 Date and Time tab (nxrt/clock.h) -------------------------------------------------------------------------
+NXTEST(clock_section_round_trip) {
+    Settings s = default_settings();
+    s.clock.custom = true;
+    s.clock.start = 1893456000;
+    s.clock.saved_at = 7;
+    s.clock.day_minutes = 20;
+    s.clock.keep_passing = true;
+    const std::string text = format_settings(s);
+    CHECK(text.find("[clock]") != std::string::npos);
+    Settings o;
+    std::string err;
+    REQUIRE_MSG(parse_settings(text, &o, &err), err);
+    CHECK(o.clock == s.clock);
+}
+
+NXTEST(clock_section_defaults_when_absent) {
+    Settings o;
+    std::string err;
+    REQUIRE_MSG(parse_settings("[mouse]\ninvert_y = 0\n", &o, &err), err);
+    CHECK(o.clock == nxrt::ClockConfig{});
+}
+
+NXTEST(clock_section_bad_values) {
+    struct Case {
+        const char* line;
+        const char* key;
+    };
+    const Case cases[] = {{"day_minutes = 0", "day_minutes"}, {"day_minutes = 5000", "day_minutes"}, {"mode = banana", "mode"}, {"start = -5", "start"},
+                          {"saved_at = x", "saved_at"}, {"keep_passing = maybe", "keep_passing"}};
+    for (const Case& c : cases) {
+        Settings o;
+        std::string err;
+        CHECK_MSG(!parse_settings(std::string("[clock]\n") + c.line + "\n", &o, &err), c.line);
+        CHECK_MSG(err.find(c.key) != std::string::npos, err);
+    }
+}

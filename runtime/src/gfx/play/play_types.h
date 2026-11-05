@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "nxrt/clock.h"
 #include "nxrt/extras.h"
 #include "play_fastboot.h"
 #include "play_tweaks.h"
@@ -285,6 +286,7 @@ struct Settings {
     FpsSettings fps;
     QuitSettings quit;
     FastbootSettings fastboot;     // [tweaks] skip_intro skip_boot_logos fast_menus menu_speed (play_fastboot.h, S46)
+    nxrt::ClockConfig clock;       // [clock] mode start saved_at day_minutes keep_passing (nxrt/clock.h): the F1 Date and Time tab
     Output out[kActCount];         // the [switch] table; defaulted from ActInfo::default_out
     std::vector<Binding> bindings;
     // [meta] defaults_rev: the factory-defaults revision the file was written with (0 when the file has no [meta]). When a file with
@@ -385,6 +387,7 @@ const char* key_alt_sens();
 //              glow_color (off | R,G,B) suit_glow ball_glow gun_glow (auto | off | R,G,B)   (play_tweaks.h)
 //   [fps]      show (1/0) key (a keyboard key, F2) corner (top_left top_right bottom_left bottom_right) detail (0..2) in_screenshots (1/0)
 //   [quit]     pad (pad buttons held together, e.g. back+start; none = off) key (a keyboard key; none = off)   (open the "Close the game?" prompt)
+//   [clock]    mode (system | custom) start saved_at (posix seconds, >= 0) day_minutes (1..1440) keep_passing (1/0)   (the game's date, nxrt/clock.h)
 //   [padmap]   <south east west north left_shoulder right_shoulder left_trigger right_trigger start back left_stick right_stick dpad_up dpad_down
 //              dpad_left dpad_right> = default | none | <Switch buttons joined by '+', e.g. A or ZL+L>   (the pad button presses those Switch buttons)
 //   [switch]   <action> = <output>      e.g.  fire = ZR    beam_1 = X+UP    (missing actions keep the default)

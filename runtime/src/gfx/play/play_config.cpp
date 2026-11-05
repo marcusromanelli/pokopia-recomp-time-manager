@@ -150,7 +150,7 @@ Settings builtin_settings() {
     return s;
 }
 
-enum class Sec { None, Unknown, Meta, Mouse, Pad, PadMap, Timing, Display, Audio, Hdr, Upscale, Latency, Picture, Prompts, Fps, Quit, Switch, Aim, Camera, Tweaks, Bindings };
+enum class Sec { None, Unknown, Meta, Mouse, Pad, PadMap, Timing, Display, Audio, Hdr, Upscale, Latency, Picture, Prompts, Fps, Quit, Switch, Aim, Camera, Tweaks, Clock, Bindings };
 
 // The factory-defaults revision this build writes ([meta] defaults_rev) and the factory bindings an older controls.ini does not have: the
 // game's (play_types.h GameDefaults).
@@ -179,6 +179,7 @@ const char* sec_label(Sec s) {
         case Sec::Aim: return "[aim]";
         case Sec::Camera: return "[camera]";
         case Sec::Tweaks: return "[tweaks]";
+        case Sec::Clock: return "[clock]";
         default: return "";
     }
 }
@@ -322,6 +323,28 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
         case Sec::Camera:
             if (k == "gun_drives_view") return set_bool(&s->camera.gun_drives_view);
             break;
+        case Sec::Clock: {
+            if (k == "mode") {
+                if (v != "system" && v != "custom") {
+                    *msg = "mode must be system or custom, got '" + v + "'";
+                    return false;
+                }
+                s->clock.custom = v == "custom";
+                return true;
+            }
+            if (k == "day_minutes") return set_int(1, 1440, &s->clock.day_minutes);
+            if (k == "keep_passing") return set_bool(&s->clock.keep_passing);
+            if (k == "start" || k == "saved_at") {
+                long long x = 0;
+                if (!to_int(v, &x) || x < 0) {
+                    *msg = k + " must be a whole number of seconds >= 0, got '" + v + "'";
+                    return false;
+                }
+                (k == "start" ? s->clock.start : s->clock.saved_at) = x;
+                return true;
+            }
+            break;
+        }
         case Sec::Tweaks: {
             bool mine = false;
             if (!fastboot_apply(k, v, &s->fastboot, &mine, msg)) return false;
@@ -617,6 +640,7 @@ Sec fixed_sec(const std::string& key) {
     if (key == "aim") return Sec::Aim;
     if (key == "camera") return Sec::Camera;
     if (key == "tweaks") return Sec::Tweaks;
+    if (key == "clock") return Sec::Clock;
     if (key == "switch") return Sec::Switch;
     return Sec::Unknown;
 }
@@ -897,6 +921,12 @@ std::string format_settings(const Settings& s) {
     o += "\n[tweaks]\n";
     fastboot_format(s.fastboot, &o);
     o += format_tweaks(s.tweaks);
+    o += "\n[clock]\n";
+    kv("mode", s.clock.custom ? "custom" : "system");
+    kv("start", std::to_string(s.clock.start));
+    kv("saved_at", std::to_string(s.clock.saved_at));
+    kv("day_minutes", std::to_string(s.clock.day_minutes));
+    kv("keep_passing", flag(s.clock.keep_passing));
 
     o += "\n[pad]\n";
     kv("label_abxy", flag(s.pad.label_abxy));
