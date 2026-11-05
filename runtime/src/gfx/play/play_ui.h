@@ -53,7 +53,8 @@ public:
     virtual void request_quit_prompt() {}
 };
 
-// Draws the settings menu: pages Display, Graphics, Controls (mouse, keyboard bindings, gamepad, Switch layout, status), Audio and About, plus
+// Draws the settings menu: pages Display, Graphics, Controls (mouse, keyboard bindings, gamepad, Switch layout, status), Audio, Date and Time
+// (play_ui_clock.h) and About, plus
 // a Game page when the registered game has tweaks of its own. Call between ImGui::Begin / End of the window. Everything is laid out in units
 // of the font size, so it follows the overlay's UI scale (overlay.cpp). Keeps its editing state in a function-local static (one page per process).
 void draw_settings_page(UiHost& host);

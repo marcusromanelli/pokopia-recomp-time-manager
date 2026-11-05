@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Play mode settings page: the "Controls" window of the F1 overlay. The contract is play_ui.h. The page edits a working copy of the
-// settings: Apply and save hands it to the host, Revert and Factory defaults replace the copy, and nothing else reaches the game.
+// settings: Apply and save hands it to the host, Revert and Factory defaults replace the copy, and nothing else reaches the game
+// (except the Date and Time tab's clock, which applies at once).
 #include "play_ui.h"
+#include "play_ui_clock.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -90,6 +92,7 @@ struct Page {
     double monitors_at = -1e9;
     std::vector<std::string> audio_devices;   // Audio page: output device names, read when the page opens and by its Refresh button
     bool audio_loaded = false;
+    ClockUi clock_ui;                      // Date and Time tab: the custom date fields and the last Save's message (local, not saved)
 };
 
 void mark(Page& p) { p.dirty = true; }
@@ -1537,6 +1540,14 @@ void draw_settings_page(UiHost& host) {
         }
         if (ImGui::BeginTabItem("Audio")) {
             audio_page(p);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Date and Time")) {   // the game's clock (play_ui_clock.cpp): applies at once, apart from Apply and save
+            if (clock_ui(p.edit.clock, live, p.clock_ui)) {
+                Settings s = host.settings();
+                s.clock = p.edit.clock;
+                host.apply(s);
+            }
             ImGui::EndTabItem();
         }
         if (const GamePlay* gp = game_play(); gp && gp->tweaks_tab && ImGui::BeginTabItem("Game")) {   // the game's optional looks and start-up tweaks

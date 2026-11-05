@@ -16,6 +16,8 @@
 #include "nxrt/input_source.h"
 #include "play/play_game.h"
 #include "play/play_ui.h"
+#include "play/play_ui_clock.h"
+#include "nxrt/config.h"
 
 NXTEST_GROUP(play_ui)
 
@@ -90,7 +92,7 @@ void run_frames(play::UiHost& host, int n) {
 
 // The page has two levels of tabs: the pages (Display, Graphics, Controls, Audio, the game's own page, About) and the Controls page's
 // own tabs (Mouse, keyboard bindings, Gamepad, Switch layout, Status). The pages (play_ui.cpp draw_settings_page, controls_page).
-const char* const kPages[] = {"Display", "Graphics", "Controls", "Audio", "Game", "About"};
+const char* const kPages[] = {"Display", "Graphics", "Controls", "Audio", "Date and Time", "Game", "About"};
 const char* const kControlsTabs[] = {"Mouse", "Keyboard and mouse buttons", "Gamepad", "Switch layout", "Status"};
 
 // The tab bar that has a tab with this label, and the tab; nullptr when no tab bar drawn so far has it. Tabs are looked up by their
@@ -256,4 +258,77 @@ NXTEST(fps_flip_after_load_draws_without_apply) {
     CHECK(draw_all_tabs(host));
     CHECK_EQ(host.applies, 0);
     CHECK_EQ(host.begins, 0);
+}
+
+// ---- the Date and Time tab (play_ui_clock.cpp) ------------------------------------------------------------------------------------
+NXTEST(clock_tab_draws_locked_and_unlocked) {
+    Headless ui;
+    FakeHost host;
+    host.status_.clock_editable = false;
+    host.status_.clock_guest = host.status_.clock_host = 1762353120;
+    run_frames(host, 1);
+    CHECK(open_and_check(host, "Date and Time"));
+    run_frames(host, 5);
+    host.status_.clock_editable = true;
+    run_frames(host, 5);
+    CHECK_EQ(host.applies, 0);
+}
+
+namespace {
+play::ClockUi june_2050(int day = 15, int month = 6, int year = 2050) {
+    play::ClockUi u;
+    u.picked_custom = true;
+    u.day = day, u.month = month, u.year = year, u.hour = 12, u.minute = 30;
+    return u;
+}
+struct UtcZone {
+    UtcZone() { nxrt::config_set("time", "zone", "UTC"); }
+    ~UtcZone() { nxrt::config_clear(); }
+};
+}  // namespace
+
+NXTEST(clock_ui_save_invalid_date_refused) {
+    UtcZone z;
+    nxrt::ClockConfig c;
+    play::LiveStatus live;
+    play::ClockUi u = june_2050(31, 2, 2026);
+    CHECK(!play::clock_ui_save(c, live, u));
+    CHECK(c == nxrt::ClockConfig{});
+    CHECK(u.notice_warn);
+    CHECK(!u.notice.empty());
+}
+
+NXTEST(clock_ui_save_valid_sets_config) {
+    UtcZone z;
+    nxrt::ClockConfig c;
+    play::LiveStatus live;
+    live.clock_host = 1762353120;
+    live.clock_guest = 1762353120;
+    play::ClockUi u = june_2050();
+    REQUIRE(play::clock_ui_save(c, live, u));
+    CHECK(c.custom);
+    CHECK_EQ(c.start, 2538909000ll);
+    CHECK_EQ(c.saved_at, 1762353120ll);
+    CHECK(!u.notice_warn);
+}
+
+NXTEST(clock_ui_save_earlier_warns) {
+    UtcZone z;
+    nxrt::ClockConfig c;
+    play::LiveStatus live;
+    live.clock_host = 1762353120;
+    live.clock_guest = 2538909000ll + 100;
+    play::ClockUi u = june_2050();
+    REQUIRE(play::clock_ui_save(c, live, u));
+    CHECK(c.custom);
+    CHECK(u.notice_warn);
+}
+
+NXTEST(clock_ui_year_out_of_range) {
+    UtcZone z;
+    nxrt::ClockConfig c;
+    play::LiveStatus live;
+    play::ClockUi u = june_2050(1, 1, 1999);
+    CHECK(!play::clock_ui_save(c, live, u));
+    CHECK(c == nxrt::ClockConfig{});
 }
