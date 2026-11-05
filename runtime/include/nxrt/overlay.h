@@ -65,6 +65,7 @@ public:
     bool wants_input() const;                // visible and ImGui wants the mouse or keyboard
     bool wants_mouse() const;                // visible and the pointer is over the menu or a widget is being dragged
     bool wants_keyboard() const;             // visible and a text field or navigation has the keyboard
+    bool wants_text() const;                 // visible and a text field is being edited: typed characters must reach ImGui
     // (both reflect the last drawn frame: ImGui decides hover while it builds the frame)
 
     // Extra panels for later streams (settings, dev menu): fn runs inside an ImGui window titled `title` while visible.

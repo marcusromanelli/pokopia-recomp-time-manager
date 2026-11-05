@@ -872,6 +872,15 @@ uint64_t Overlay::set_keyboard_pad(uint64_t buttons, int lx, int ly) {
 bool Overlay::wants_input() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, true, true); }
 bool Overlay::wants_mouse() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, true, false); }
 bool Overlay::wants_keyboard() const { return impl_->visible && imgui_wants(impl_->mu, impl_->imgui, false, true); }
+bool Overlay::wants_text() const {
+    if (!impl_->visible) return false;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(impl_->imgui);
+    const bool w = ImGui::GetIO().WantTextInput;
+    ImGui::SetCurrentContext(prev);
+    return w;
+}
 
 void Overlay::add_panel(const std::string& title, std::function<void()> fn) { impl_->panels.push_back({title, std::move(fn)}); }
 

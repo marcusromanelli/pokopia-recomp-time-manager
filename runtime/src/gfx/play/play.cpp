@@ -864,7 +864,8 @@ int update_hook(::Ctx*, uint64_t, void*) {
     st.overlay_was_visible = overlay_visible;
 
     if (st.window) {
-        platform::set_text_input(st.overlay && st.overlay->keyboard_open());   // typed text for the on-screen keyboard only
+        // Typed text for the on-screen keyboard and for a text field of the F1 menu (ImGui inserts characters from text events only).
+        platform::set_text_input(st.overlay && (st.overlay->keyboard_open() || st.overlay->wants_text()));
         const bool want = st.capture_mouse && platform::focused() && !platform::minimized() && !overlay_visible && playing &&
                           st.capture_state.load() == 0 && !hid::jc2_mouse_wants_pointer();
         if (want != platform::relative_mouse()) {
