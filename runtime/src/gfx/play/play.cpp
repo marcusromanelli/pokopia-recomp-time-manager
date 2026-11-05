@@ -25,12 +25,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
 
+#include "../../services/clock_math.h"
 #include "nxrt/audio_sink.h"
+#include "nxrt/clock.h"
 #include "nxrt/ftrace.h"
 #include "nxrt/game.h"
 #include "play_display.h"
@@ -414,6 +417,7 @@ void vib_sink(uint32_t slot, int hand, const hid::VibrationValue& v, void*) {
         if (!save_settings(st.path, st.settings, &err)) NXLOG_W(kTag, "cannot save %s: %s", st.path.c_str(), err.c_str());
         st.dirty = false;
     }
+    nxrt::clock_flush();                                // the custom clock's position for the next run
     if (flush_gpu_cache) nvn::backend_flush_caches();   // unsafe after VK_ERROR_DEVICE_LOST; normal early-exit paths still save it
     nxrt::log_flush();
     if (tt::enabled() && !tt::finished()) tt::end_run(code, verdict, message);     // writes result.json, then terminates
@@ -428,6 +432,12 @@ void vib_sink(uint32_t slot, int hand, const hid::VibrationValue& v, void*) {
 namespace {
 
 [[noreturn]] void quit_now(const char* why) { exit_process(0, "pass", why); }
+
+// The Date and Time tab may change the clock: the game's own rule (the title, before the world), else until the first input tick.
+bool clock_editable_now() {
+    const GamePlay* gp = game_play();
+    return gp && gp->clock_editable ? gp->clock_editable() : g().pi_calls.load() == 0;
+}
 
 void set_window_mode(const std::string& mode) {
     G& st = g();
@@ -751,9 +761,15 @@ int update_hook(::Ctx*, uint64_t, void*) {
             const std::string old_mode = st.settings.display.window_mode;
             const int old_monitor = st.settings.display.monitor;
             const int old_w = st.settings.display.width, old_h = st.settings.display.height;
+            // The clock changes only on the title: a page copy applied later keeps the clock in force (the rest still applies).
+            const bool clock_ok = clock_editable_now();
+            if (!clock_ok && !(s.clock == st.settings.clock)) NXLOG_I(kTag, "the date and time can only change on the title screen: the clock stays as it was");
+            s.clock = services::clockm::clock_accept(st.settings.clock, s.clock, clock_ok);
+            const bool clock_changed = !(s.clock == st.settings.clock);
             st.settings = s;
             st.settings_epoch++;
             lk.unlock();
+            if (clock_changed) nxrt::clock_apply(s.clock);
             st.engine->set_settings(s, now);
             apply_frame_cap(s);
             display_tuning(s.display);
@@ -796,6 +812,7 @@ int update_hook(::Ctx*, uint64_t, void*) {
     const GamePlay* gp = game_play();
     if (gp && gp->frame_begin) gp->frame_begin();
     if (st.engine) st.engine->frame_tick();
+    nxrt::clock_tick();                                // a fast custom clock's shared memory, the clock's state file
 
     // what the game is doing: the context, the cycle hint, the pointer
     const uint64_t pi = st.last_pi_ns.load();
@@ -1049,6 +1066,9 @@ public:
         s.out = st.engine->output(now_ns());
         s.pitch_deg = gs.pitch_rad * 180.0 / kPi;
         s.input_calls = st.pi_calls.load();
+        s.clock_editable = clock_editable_now();
+        s.clock_guest = nxrt::clock_guest_now();
+        s.clock_host = nxrt::clock_host_now();
         return s;
     }
     std::string settings_path() const override { return g().path; }
@@ -1191,6 +1211,8 @@ bool load() {
         else
             NXLOG_W(kTag, "cannot save the upgraded %s: %s", st.path.c_str(), e3.c_str());
     }
+    // The game's clock (F1 Date and Time): the [clock] settings, and where the custom clock was, from the state file next to controls.ini.
+    nxrt::clock_start(st.settings.clock, std::filesystem::path(st.path).replace_filename("clock_state.ini").string());
     // Display extras: a value set in mpr.ini or in the environment (NXRT_HDR_MODE ...) overrides the file; the file overrides the built-in defaults.
     st.settings.extras = merge_env(st.settings.extras);
     extras::set_settings(st.settings.extras);

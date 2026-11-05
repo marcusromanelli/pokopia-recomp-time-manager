@@ -18,5 +18,6 @@ play::DisplayLive play_display_live();
 uint32_t play_display_calls();
 void play_status_text(char* buf, size_t n);
 bool play_follow_live();   // the follow camera updated within the last second: the player is in the world (not the title)
+bool play_clock_editable();   // the follow camera never updated since start-up: the player has not entered the world (F1 Date and Time)
 
 }  // namespace nxrt::games::pkp

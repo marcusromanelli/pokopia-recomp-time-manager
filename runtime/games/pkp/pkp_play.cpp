@@ -852,4 +852,6 @@ bool play_follow_live() {
     return t != 0 && mono_ns() - t < 1000000000ull;
 }
 
+bool play_clock_editable() { return g_follow_ns.load(std::memory_order_relaxed) == 0; }
+
 }  // namespace nxrt::games::pkp

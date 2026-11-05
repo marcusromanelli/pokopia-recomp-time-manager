@@ -96,6 +96,8 @@ struct GamePlay {
     // F1 page, Graphics tab (kDisplayOptQuality): writes a quality preset's values into d (the ids of quality_presets(), play_types.h; a
     // device preset also writes render_scale and fps_cap). False: unknown name.
     bool (*quality_preset)(const char* name, DisplaySettings& d) = nullptr;
+    // F1 page, Date and Time tab: the clock may change now (the title, before the world). nullptr: until the first input tick.
+    bool (*clock_editable)() = nullptr;
 };
 
 const GamePlay* game_play();         // the registered game's table, or nullptr

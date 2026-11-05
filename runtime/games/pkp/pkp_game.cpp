@@ -67,6 +67,7 @@ const play::GamePlay& game_play() {
         p.menu_over_value = &menu_over_value;
         p.menu_active = &menu_active;
         p.menu_in_game = &menu_in_game;
+        p.clock_editable = &play_clock_editable;   // the F1 Date and Time tab: until the player enters the world
         return p;
     }();
     return t;

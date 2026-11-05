@@ -26,6 +26,9 @@ struct LiveStatus {
     EngineOut out;                     // what the keyboard and mouse press on the Switch pad right now
     double pitch_deg = 0;              // the aim's pitch
     uint64_t input_calls = 0;          // the game's per-tick player-input calls seen (GameHost::input_tick; 0: the game has not reached gameplay)
+    bool clock_editable = true;        // the Date and Time tab may change the clock now (the title, before the player entered the world)
+    int64_t clock_guest = 0;           // the game's clock now (nxrt::clock_guest_now, posix seconds)
+    int64_t clock_host = 0;            // the PC clock now (posix seconds)
 };
 
 class UiHost {
