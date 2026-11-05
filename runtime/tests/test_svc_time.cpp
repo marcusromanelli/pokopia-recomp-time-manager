@@ -17,6 +17,7 @@
 #include "../src/services/timezone.h"
 #include "nxrt/clock.h"
 #include "nxrt/config.h"
+#include "nxrt/kernel.h"
 #include "nxrt/services.h"
 #include "svc_test_util.h"
 
@@ -670,4 +671,22 @@ NXTEST(svc_time_clock_custom_without_start_is_system) {
     clock_apply(c);
     nxsvc::Session st = nxsvc::connect("time:u");
     CHECK(abs64(user_now(st) - host_unix()) <= 2);
+}
+
+// The guest's own reading of the shared memory (nn::time SDK, Ryujinx TimeSharedMemory): steady time = the raw tick counter in ns + the
+// steady context's internal offset; posix = the local context's offset + those steady seconds. It must give the PC clock in System mode,
+// however long the host has been up (the tick counter counts from the host's boot, not from the runtime's start).
+NXTEST(svc_time_shared_memory_guest_reading_matches_host) {
+    nxsvc::Env env;
+    nxsvc::Session st = nxsvc::connect("time:u");
+    const uint8_t* base = shm_of(st);
+    REQUIRE(base != nullptr);
+    uint64_t internal = 0;
+    std::memcpy(&internal, live_slot(base, 0x00, 4, 0x18), 8);
+    const uint64_t t = kernel::system_tick(), hz = kernel::tick_hz();
+    const uint64_t raw_ns = (t / hz) * 1000000000ull + (t % hz) * 1000000000ull / hz;
+    const int64_t steady_s = static_cast<int64_t>(raw_ns + internal) / 1000000000;
+    int64_t offset = 0;
+    std::memcpy(&offset, live_slot(base, 0x38, 4, 0x20), 8);
+    CHECK_MSG(abs64(offset + steady_s - host_unix()) <= 3, "guest reads " + std::to_string(offset + steady_s) + ", host " + std::to_string(host_unix()));
 }

@@ -13,8 +13,10 @@
 //     anchored guest time that runs 1440 / day_minutes times as fast as the tick counter, published in steps: every 250 ms (clock_tick)
 //     the published time jumps to the anchored clock, and in between it runs at real speed like the steady clock the guest adds to the
 //     shared memory contexts. IPC and the shared memory so read the same clock, and it never goes back (the speed is at least 1).
-//   * steady clock: ticks since start-up (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns) + a fixed epoch of 3600 s + the internal
-//     offset + the test offset (both in ns, TimeSpanType). Seconds are the floor of that sum; the sequence is monotonic.
+//   * steady clock: the raw tick counter (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns; it counts from the host's boot) + a fixed
+//     epoch of 3600 s + the internal offset + the test offset (both in ns, TimeSpanType). Seconds are the floor of that sum; the sequence is
+//     monotonic. The guest's SDK computes the same sum itself from CNTPCT and the shared memory's internal offset, so no start tick is
+//     taken off (that made the game's clock run ahead by the host's uptime).
 //   * every change of an offset rewrites the shared memory, so the guest's fast GetCurrentTime path sees the same values.
 //
 // Time shared memory (0x1000 bytes, offsets as TimeSharedMemory.cs writes them). A block is a u32 index at `off`, `pad` bytes, then two
@@ -179,7 +181,7 @@ double base_now(const State& s) {
 }
 
 int64_t steady_total_ns(const State& s) {
-    return static_cast<int64_t>(raw_ticks_ns() - s.tick0_ns) + static_cast<int64_t>(kSteadyEpochNs) + s.internal_ns + s.test_ns;
+    return static_cast<int64_t>(raw_ticks_ns()) + static_cast<int64_t>(kSteadyEpochNs) + s.internal_ns + s.test_ns;
 }
 int64_t steady_secs(const State& s) { return steady_total_ns(s) / 1000000000; }
 
