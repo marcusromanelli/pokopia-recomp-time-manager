@@ -10,8 +10,9 @@
 //   * posix time of a clock = the base clock + that clock's offset. The user and the local clock share the local offset (on the console
 //     the user clock is the local clock); the network and the ephemeral network clock have their own.
 //   * base clock (nxrt/clock.h, the F1 Date and Time tab): host UTC (GetSystemTimePreciseAsFileTime) in System mode; in Custom mode an
-//     anchored guest time that runs 1440 / day_minutes times as fast as the tick counter. A fast clock's contexts in the shared memory are
-//     rewritten every 250 ms (clock_tick), because the guest adds the real-speed steady clock to them in between.
+//     anchored guest time that runs 1440 / day_minutes times as fast as the tick counter, published in steps: every 250 ms (clock_tick)
+//     the published time jumps to the anchored clock, and in between it runs at real speed like the steady clock the guest adds to the
+//     shared memory contexts. IPC and the shared memory so read the same clock, and it never goes back (the speed is at least 1).
 //   * steady clock: ticks since start-up (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns) + a fixed epoch of 3600 s + the internal
 //     offset + the test offset (both in ns, TimeSpanType). Seconds are the floor of that sum; the sequence is monotonic.
 //   * every change of an offset rewrites the shared memory, so the guest's fast GetCurrentTime path sees the same values.
@@ -129,6 +130,8 @@ struct State {
     std::string state_path;                               // the state file ("" = none)
     double saved_guest = 0;                               // the guest time and tick of the last state file write
     uint64_t saved_mono = 0, last_shm_mono = 0;           // ... and of the last shared memory refresh
+    double pub_game = 0;                                  // Custom mode: the published guest time at pub_mono (runs at real speed from there)
+    uint64_t pub_mono = 0;
 };
 
 std::mutex& mu() {
@@ -168,8 +171,12 @@ int64_t host_unix_now() {
 #endif
 }
 
-// The base clock in posix seconds: the PC clock, or the custom clock.
-double base_now(const State& s) { return s.clock.custom ? clockm::guest_at(s.anchor, raw_ticks_ns()) : static_cast<double>(host_unix_now()); }
+// The base clock in posix seconds: the PC clock, or the published custom clock (a step at each refresh, real speed in between).
+double base_now(const State& s) {
+    if (!s.clock.custom) return static_cast<double>(host_unix_now());
+    const uint64_t mono = raw_ticks_ns();
+    return mono <= s.pub_mono ? s.pub_game : s.pub_game + static_cast<double>(mono - s.pub_mono) * 1e-9;
+}
 
 int64_t steady_total_ns(const State& s) {
     return static_cast<int64_t>(raw_ticks_ns() - s.tick0_ns) + static_cast<int64_t>(kSteadyEpochNs) + s.internal_ns + s.test_ns;
@@ -178,11 +185,16 @@ int64_t steady_secs(const State& s) { return steady_total_ns(s) / 1000000000; }
 
 struct Now {
     int64_t host, steady;
+    bool custom = false;                                  // Custom mode: the contexts' offsets come from the exact values below
+    double host_x = 0, steady_x = 0;                      // the base clock and the steady clock in seconds, unrounded
 };
 Now now_of(const State& s) {
     Now n{};
-    n.host = static_cast<int64_t>(std::floor(base_now(s)));
+    n.host_x = base_now(s);
+    n.steady_x = static_cast<double>(steady_total_ns(s)) * 1e-9;
+    n.host = static_cast<int64_t>(std::floor(n.host_x));
     n.steady = steady_secs(s);
+    n.custom = s.clock.custom;
     return n;
 }
 
@@ -203,7 +215,8 @@ uint32_t write_bit_of(Clock c) {
 
 SysCtx sys_ctx(const Now& n, int64_t delta) {
     SysCtx c{};
-    c.offset = n.host + delta - n.steady;
+    // Custom mode: base - steady from the exact values, so a refresh never lowers offset + floor(steady) (rounding both apart could).
+    c.offset = n.custom ? static_cast<int64_t>(std::floor(n.host_x - n.steady_x)) + delta : n.host + delta - n.steady;
     c.time_point = n.steady;
     std::memcpy(c.source, kSourceId, 16);
     return c;
@@ -673,6 +686,8 @@ void time_reset() {
     s.state_path.clear();
     s.saved_guest = 0;
     s.saved_mono = s.last_shm_mono = 0;
+    s.pub_game = 0;
+    s.pub_mono = 0;
     if (s.created) init_locked(s);
 }
 
@@ -720,6 +735,8 @@ bool read_state(const std::string& path, clockm::State* out) {
 void anchor_locked(State& s, double game) {
     const uint64_t mono = raw_ticks_ns();
     s.anchor = clockm::Anchor{game, mono, clockm::speed_of(s.clock.day_minutes)};
+    s.pub_game = game;
+    s.pub_mono = mono;
     s.saved_guest = game;
     s.saved_mono = mono;
     s.last_shm_mono = mono;
@@ -740,9 +757,16 @@ int days_in(int year, int month) {
 }
 
 // ---- nxrt/clock.h -----------------------------------------------------------------------------------------------------------------
-void clock_start_impl(const ClockConfig& c, const std::string& state_path) {
+// mode = custom without a saved date (a hand-edited controls.ini) runs on the PC clock.
+ClockConfig effective(ClockConfig c) {
+    if (c.custom && c.start == 0) c.custom = false;
+    return c;
+}
+
+void clock_start_impl(const ClockConfig& cfg, const std::string& state_path) {
     std::lock_guard<std::mutex> lk(mu());
     State& s = raw_state();
+    const ClockConfig c = effective(cfg);
     s.clock = c;
     s.state_path = state_path;
     clockm::State st;
@@ -751,9 +775,10 @@ void clock_start_impl(const ClockConfig& c, const std::string& state_path) {
     write_state_locked(s);
 }
 
-void clock_apply_impl(const ClockConfig& c) {
+void clock_apply_impl(const ClockConfig& cfg) {
     std::lock_guard<std::mutex> lk(mu());
     State& s = raw_state();
+    const ClockConfig c = effective(cfg);
     const ClockConfig old = s.clock;
     if (old == c) return;
     double game = 0;
@@ -771,8 +796,10 @@ void clock_tick_impl() {
     State& s = raw_state();
     if (!s.clock.custom) return;
     const uint64_t mono = raw_ticks_ns();
-    if (s.created && s.anchor.speed > 1.0 && mono - s.last_shm_mono >= kShmRefreshNs) {
-        write_shm(s);
+    if (s.anchor.speed > 1.0 && mono - s.last_shm_mono >= kShmRefreshNs) {   // publish the next step of a fast clock
+        s.pub_game = clockm::guest_at(s.anchor, mono);
+        s.pub_mono = mono;
+        if (s.created) write_shm(s);
         s.last_shm_mono = mono;
     }
     if (clockm::should_save(base_now(s), s.saved_guest, mono, s.saved_mono)) write_state_locked(s);

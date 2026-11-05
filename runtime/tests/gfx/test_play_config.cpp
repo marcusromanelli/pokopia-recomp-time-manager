@@ -1946,7 +1946,8 @@ NXTEST(clock_section_bad_values) {
         const char* key;
     };
     const Case cases[] = {{"day_minutes = 0", "day_minutes"}, {"day_minutes = 5000", "day_minutes"}, {"mode = banana", "mode"}, {"start = -5", "start"},
-                          {"saved_at = x", "saved_at"}, {"keep_passing = maybe", "keep_passing"}};
+                          {"saved_at = x", "saved_at"}, {"keep_passing = maybe", "keep_passing"},
+                          {"start = 5", "start"}, {"start = 9223372036854775807", "start"}};   // start: 0 or a date in 2000..2099
     for (const Case& c : cases) {
         Settings o;
         std::string err;

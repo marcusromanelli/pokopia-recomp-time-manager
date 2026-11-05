@@ -97,6 +97,15 @@ struct Page {
 
 void mark(Page& p) { p.dirty = true; }
 
+}  // namespace
+
+void keep_live_settings(Settings& edit, const Settings& in_force) {
+    edit.fps = in_force.fps;
+    edit.clock = in_force.clock;
+}
+
+namespace {
+
 const char* yes_no(bool b) { return b ? "yes" : "no"; }
 const char* cstr(const char* s) { return s ? s : ""; }
 const char* act_label(Act a) { return a == Act::None ? "none (input off)" : act_info(a).name; }
@@ -227,11 +236,12 @@ void sanitize(Settings& s) {
     if (s.audio.device.empty()) s.audio.device = "default";
 }
 
-// The frame rate counter is live (the hotkey changes it in the game), so the working copy always takes it from the host, never from a
-// stale copy: Apply and save, Revert and Factory defaults leave the counter as it is.
+// The frame rate counter is live (the hotkey changes it in the game) and so is the clock (the Date and Time tab applies it at once), so
+// the working copy always takes them from the host, never from a stale copy: Apply and save, Revert and Factory defaults leave them as
+// they are.
 void apply_now(UiHost& host, Page& p) {
     stop_rebind(host, p);
-    p.edit.fps = host.settings().fps;
+    keep_live_settings(p.edit, host.settings());
     sanitize(p.edit);
     host.apply(p.edit);
     p.dirty = false;
@@ -240,7 +250,8 @@ void apply_now(UiHost& host, Page& p) {
 void revert_to_saved(UiHost& host, Page& p) {
     stop_rebind(host, p);
     p.edit = host.settings();
-    p.edit.fps = host.settings().fps;
+    keep_live_settings(p.edit, host.settings());
+    p.clock_ui.filled = false;   // the Date and Time fields follow the clock in force again
     extras::set_picture_live(p.edit.extras.picture);   // the colour sliders preview live: back to the saved values
     refresh_out_text(p);
     p.dirty = false;
@@ -249,7 +260,8 @@ void revert_to_saved(UiHost& host, Page& p) {
 void load_factory(UiHost& host, Page& p) {
     stop_rebind(host, p);
     p.edit = host.factory();
-    p.edit.fps = host.settings().fps;
+    keep_live_settings(p.edit, host.settings());
+    p.clock_ui.filled = false;
     extras::set_picture_live(p.edit.extras.picture);
     refresh_out_text(p);
     mark(p);

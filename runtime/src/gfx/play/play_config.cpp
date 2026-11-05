@@ -340,6 +340,11 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
                     *msg = k + " must be a whole number of seconds >= 0, got '" + v + "'";
                     return false;
                 }
+                // start: 0 (no date saved) or a date the tab can save, 2000-01-01 .. 2099-12-31 (UTC)
+                if (k == "start" && x != 0 && (x < 946684800 || x > 4102444799)) {
+                    *msg = "start must be 0 or posix seconds of a date in 2000..2099, got " + v;
+                    return false;
+                }
                 (k == "start" ? s->clock.start : s->clock.saved_at) = x;
                 return true;
             }

@@ -59,6 +59,9 @@ public:
 // of the font size, so it follows the overlay's UI scale (overlay.cpp). Keeps its editing state in a function-local static (one page per process).
 void draw_settings_page(UiHost& host);
 
+// The live fields the page never takes from a stale copy (the frame rate counter, the clock): copied from the settings in force into edit.
+void keep_live_settings(Settings& edit, const Settings& in_force);
+
 // The About page (play_ui_about.cpp): version, build and the folders and files in use. Draws into the current window.
 void draw_about_page(const std::string& settings_path);
 

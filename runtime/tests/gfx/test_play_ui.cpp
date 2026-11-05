@@ -332,3 +332,15 @@ NXTEST(clock_ui_year_out_of_range) {
     CHECK(!play::clock_ui_save(c, live, u));
     CHECK(c == nxrt::ClockConfig{});
 }
+
+// Revert, Factory defaults and Apply and save keep the clock in force: the tab applies it at once, so a stale copy never replaces it.
+NXTEST(keep_live_settings_keeps_the_clock) {
+    play::Settings in_force = play::default_settings();
+    in_force.clock.custom = true;
+    in_force.clock.start = 1893456000;
+    in_force.clock.saved_at = 9;
+    in_force.clock.day_minutes = 20;
+    play::Settings edit = play::default_settings();   // e.g. after Factory defaults
+    play::keep_live_settings(edit, in_force);
+    CHECK(edit.clock == in_force.clock);
+}

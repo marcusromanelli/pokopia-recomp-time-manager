@@ -539,9 +539,12 @@ NXTEST(svc_time_clock_custom_speed) {
     clock_apply(custom_2030(1));   // 1440x
     nxsvc::Session st = nxsvc::connect("time:u");
     const int64_t a = user_now(st);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    for (int i = 0; i < 12; ++i) {   // ~600 ms of frames: the clock moves on at each refresh (every 250 ms)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        clock_tick();
+    }
     const int64_t d = user_now(st) - a;
-    CHECK_MSG(d >= 140 && d <= 260, "advanced " + std::to_string(d) + " s in 100 ms");
+    CHECK_MSG(d >= 500 && d <= 1100, "advanced " + std::to_string(d) + " s in ~600 ms");
 }
 
 NXTEST(svc_time_clock_network_follows) {
@@ -565,7 +568,7 @@ NXTEST(svc_time_clock_shm_matches_ipc) {
         clock_tick();
         const int64_t now = local_ctx_time(base);
         CHECK(now >= prev);
-        CHECK(abs64(now - user_now(st)) <= 600);   // 250 ms x 1440 = 360 s, plus scheduling slack
+        CHECK_MSG(abs64(now - user_now(st)) <= 2, "shm " + std::to_string(now) + " ipc " + std::to_string(user_now(st)));   // one clock for both paths
         prev = now;
     }
     CHECK(prev > k2030 + 300);   // the context moved with the fast clock
@@ -574,7 +577,8 @@ NXTEST(svc_time_clock_shm_matches_ipc) {
 NXTEST(svc_time_clock_day_change_continuous) {
     nxsvc::Env env;
     clock_apply(custom_2030(1));
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    clock_tick();   // a frame: the fast clock publishes its next step
     const int64_t before = clock_guest_now();
     clock_apply(custom_2030(1440));
     CHECK(before > k2030 + 30);
@@ -588,7 +592,8 @@ NXTEST(svc_time_clock_state_persist_keep_off) {
     {
         nxsvc::Env env;
         clock_start(custom_2030(1), path);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        clock_tick();
         clock_flush();
         flushed = clock_guest_now();
     }
@@ -633,4 +638,36 @@ NXTEST(svc_time_clock_local_round_trip_needs_tz) {
     bad = t;
     bad.year = 1999;
     CHECK(!clock_from_local(bad, &posix));
+}
+
+// The guest's fast path: the live local context's offset + the steady clock's seconds (both floored), at a mid speed where a separate
+// floor of the base and of the steady clock could step back a second at a refresh.
+NXTEST(svc_time_clock_shm_guest_read_monotonic_mid_speed) {
+    nxsvc::Env env;
+    nxsvc::Session st = nxsvc::connect("time:u");
+    const uint8_t* base = shm_of(st);
+    REQUIRE(base != nullptr);
+    nxsvc::Session steady = st.sub(st.call(2));
+    clock_apply(custom_2030(1000));   // 1.44x
+    int64_t prev = 0;
+    int backs = 0;
+    for (int i = 0; i < 400; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        clock_tick();
+        int64_t offset = 0;
+        std::memcpy(&offset, live_slot(base, 0x38, 4, 0x20), 8);
+        const int64_t now = offset + steady.call(0).get<int64_t>(0);   // GetCurrentTimePoint: {i64 seconds, uuid}
+        if (now < prev) backs++;
+        prev = now > prev ? now : prev;
+    }
+    CHECK_EQ(backs, 0);
+}
+
+NXTEST(svc_time_clock_custom_without_start_is_system) {
+    nxsvc::Env env;
+    ClockConfig c;
+    c.custom = true;   // mode = custom but no saved date (a hand-edited controls.ini)
+    clock_apply(c);
+    nxsvc::Session st = nxsvc::connect("time:u");
+    CHECK(abs64(user_now(st) - host_unix()) <= 2);
 }
