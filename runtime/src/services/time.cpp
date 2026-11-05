@@ -13,8 +13,8 @@
 //     anchored guest time that runs 1440 / day_minutes times as fast as the tick counter, published in steps: every 250 ms (clock_tick)
 //     the published time jumps to the anchored clock, and in between it runs at real speed like the steady clock the guest adds to the
 //     shared memory contexts. IPC and the shared memory so read the same clock, and it never goes back (the speed is at least 1).
-//   * steady clock: the raw tick counter (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns; it counts from the host's boot) + a fixed
-//     epoch of 3600 s + the internal offset + the test offset (both in ns, TimeSpanType). Seconds are the floor of that sum; the sequence is
+//   * steady clock: the raw tick counter (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns; it counts from the host's boot) + the
+//     internal offset + the test offset (both in ns, TimeSpanType; no fixed epoch, see kSteadyEpochSeconds). Seconds are the floor of that sum; the sequence is
 //     monotonic. The guest's SDK computes the same sum itself from CNTPCT and the shared memory's internal offset, so no start tick is
 //     taken off (that made the game's clock run ahead by the host's uptime).
 //   * every change of an offset rewrites the shared memory, so the guest's fast GetCurrentTime path sees the same values.
@@ -63,7 +63,8 @@ namespace nxrt::services {
 namespace {
 
 // ---- constants ----------------------------------------------------------------------------------------------------------------
-constexpr uint64_t kSteadyEpochSeconds = 3600;                          // fixed epoch offset of the steady clock (this runtime's choice)
+constexpr uint64_t kSteadyEpochSeconds = 0;   // no epoch: Pokopia reads the wall clock as the context offset + the raw counter's seconds, so any
+                                              // fixed epoch here made its clock that much behind (it was 3600 s: one hour)
 constexpr uint64_t kSteadyEpochNs = kSteadyEpochSeconds * 1000000000ull;
 constexpr uint8_t kSourceId[16] = {'n', 'x', 'r', 't', '-', 's', 't', 'e', 'a', 'd', 'y', '-', 'c', 'l', 'k', '1'};   // clock_source_id
 constexpr uint32_t kShmSize = 0x1000;

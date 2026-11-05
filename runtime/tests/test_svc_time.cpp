@@ -34,7 +34,7 @@ constexpr uint32_t kOutOfRange = 0x70C74;
 constexpr uint32_t kTzConversionFailed = 0x70E74;
 constexpr uint32_t kTzNotFound = 0x7BA74;
 constexpr int64_t kEpochUnix2000 = 946684800;        // 2000-01-01T00:00:00Z
-constexpr int64_t kSteadyEpochNs = 3600000000000ll;  // 3600 s, the start of the steady clock
+constexpr int64_t kSteadyEpochNs = 0;               // no epoch: the steady clock is the raw counter (from the host's boot) + its offsets
 constexpr uint8_t kSourceId[16] = {'n', 'x', 'r', 't', '-', 's', 't', 'e', 'a', 'd', 'y', '-', 'c', 'l', 'k', '1'};
 
 int64_t host_unix() {
@@ -134,7 +134,7 @@ NXTEST(svc_time_system_clock_context) {
     REQUIRE(r.out.size() >= 0x20);
     const int64_t offset = r.get<int64_t>(0);
     const int64_t time_point = r.get<int64_t>(8);
-    CHECK(time_point >= 3600);                        // steady clock starts at the 3600 s epoch
+    CHECK(time_point > 0);                            // the steady clock counts from the host's boot
     CHECK(abs64(offset + time_point - host_unix()) <= 3);   // posix = steady + offset
     CHECK(std::memcmp(r.out.data() + 16, kSourceId, 16) == 0);
 }
@@ -147,7 +147,7 @@ NXTEST(svc_time_steady_clock_get_current_time_monotonic) {
     nxsvc::Reply first = steady.call(0);              // ISteadyClock::GetCurrentTimePoint -> {i64, uuid}
     REQUIRE(first.ok());
     REQUIRE(first.out.size() >= 0x18);
-    CHECK(first.get<int64_t>(0) >= 3600);
+    CHECK(first.get<int64_t>(0) > 0);
     CHECK(std::memcmp(first.out.data() + 8, kSourceId, 16) == 0);
     int64_t prev = first.get<int64_t>(0);
     bool monotonic = true;
@@ -222,7 +222,7 @@ NXTEST(svc_time_shared_memory_layout) {
     REQUIRE(base != nullptr);
     CHECK_EQ(size, 0x1000u);
 
-    // Steady clock context, pad 4 at 0x00: internal offset = 3600 s epoch (no offsets set), source uuid.
+    // Steady clock context, pad 4 at 0x00: internal offset = 0 (no offsets set, no epoch), source uuid.
     const uint8_t* steady = live_slot(base, 0x00, 4, 0x18);
     int64_t internal = 0;
     std::memcpy(&internal, steady, 8);
@@ -235,7 +235,7 @@ NXTEST(svc_time_shared_memory_layout) {
         int64_t offset = 0, tp = 0;
         std::memcpy(&offset, c, 8);
         std::memcpy(&tp, c + 8, 8);
-        CHECK(tp >= 3600);
+        CHECK(tp > 0);
         CHECK(abs64(offset + tp - host_unix()) <= 3);
         CHECK(std::memcmp(c + 16, kSourceId, 16) == 0);
     }
@@ -351,7 +351,7 @@ NXTEST(svc_time_tz_utc_config_location_and_list) {
     REQUIRE(upd.ok());
     REQUIRE(upd.out.size() >= 0x40);
     CHECK_EQ(upd.str(0, 0x24), std::string("UTC"));
-    CHECK(upd.get<int64_t>(0x28) >= 3600);
+    CHECK(upd.get<int64_t>(0x28) > 0);
     CHECK(std::memcmp(upd.out.data() + 0x30, kSourceId, 16) == 0);
     config_clear();
 }
@@ -689,4 +689,18 @@ NXTEST(svc_time_shared_memory_guest_reading_matches_host) {
     int64_t offset = 0;
     std::memcpy(&offset, live_slot(base, 0x38, 4, 0x20), 8);
     CHECK_MSG(abs64(offset + steady_s - host_unix()) <= 3, "guest reads " + std::to_string(offset + steady_s) + ", host " + std::to_string(host_unix()));
+}
+
+// Pokopia's reading as seen in game (pkp.log trace + Pokédex time): the local context's offset + the raw tick counter's seconds, without the
+// steady context's internal offset. With no steady offsets set, that must also give the PC clock.
+NXTEST(svc_time_shared_memory_guest_raw_reading_matches_host) {
+    nxsvc::Env env;
+    nxsvc::Session st = nxsvc::connect("time:u");
+    const uint8_t* base = shm_of(st);
+    REQUIRE(base != nullptr);
+    const uint64_t t = kernel::system_tick(), hz = kernel::tick_hz();
+    const int64_t raw_s = static_cast<int64_t>(t / hz);
+    int64_t offset = 0;
+    std::memcpy(&offset, live_slot(base, 0x38, 4, 0x20), 8);
+    CHECK_MSG(abs64(offset + raw_s - host_unix()) <= 3, "guest reads " + std::to_string(offset + raw_s) + ", host " + std::to_string(host_unix()));
 }
