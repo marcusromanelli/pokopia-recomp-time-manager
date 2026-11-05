@@ -7,8 +7,11 @@
 // cross-check the command ids and struct sizes. The Switchbrew "Services API" page was used for the list of time services.
 //
 // Model (one process-wide state, guarded by one mutex):
-//   * posix time of a clock = host UTC (GetSystemTimePreciseAsFileTime) + that clock's offset. The user and the local clock share the
-//     local offset (on the console the user clock is the local clock); the network and the ephemeral network clock have their own.
+//   * posix time of a clock = the base clock + that clock's offset. The user and the local clock share the local offset (on the console
+//     the user clock is the local clock); the network and the ephemeral network clock have their own.
+//   * base clock (nxrt/clock.h, the F1 Date and Time tab): host UTC (GetSystemTimePreciseAsFileTime) in System mode; in Custom mode an
+//     anchored guest time that runs 1440 / day_minutes times as fast as the tick counter. A fast clock's contexts in the shared memory are
+//     rewritten every 250 ms (clock_tick), because the guest adds the real-speed steady clock to them in between.
 //   * steady clock: ticks since start-up (kernel::system_tick, 19.2 MHz, 1 tick = 625/12 ns) + a fixed epoch of 3600 s + the internal
 //     offset + the test offset (both in ns, TimeSpanType). Seconds are the floor of that sum; the sequence is monotonic.
 //   * every change of an offset rewrites the shared memory, so the guest's fast GetCurrentTime path sees the same values.
@@ -25,7 +28,11 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -41,6 +48,8 @@
 #include <windows.h>
 #endif
 
+#include "clock_math.h"
+#include "nxrt/clock.h"
 #include "nxrt/config.h"
 #include "nxrt/kernel.h"
 #include "nxrt/tt.h"
@@ -114,6 +123,12 @@ struct State {
     int64_t location_updated = 0;                         // steady seconds when the device location was last set
     std::unique_ptr<ServiceSharedMemory> shm;
     ServiceEvent clock_event, tz_event;                   // never signaled
+    // The base clock (nxrt/clock.h). Kept by init_locked (play mode sets it, possibly before the first service use); time_reset clears it.
+    ClockConfig clock;
+    clockm::Anchor anchor;                                // Custom mode: the guest time at a tick
+    std::string state_path;                               // the state file ("" = none)
+    double saved_guest = 0;                               // the guest time and tick of the last state file write
+    uint64_t saved_mono = 0, last_shm_mono = 0;           // ... and of the last shared memory refresh
 };
 
 std::mutex& mu() {
@@ -153,6 +168,9 @@ int64_t host_unix_now() {
 #endif
 }
 
+// The base clock in posix seconds: the PC clock, or the custom clock.
+double base_now(const State& s) { return s.clock.custom ? clockm::guest_at(s.anchor, raw_ticks_ns()) : static_cast<double>(host_unix_now()); }
+
 int64_t steady_total_ns(const State& s) {
     return static_cast<int64_t>(raw_ticks_ns() - s.tick0_ns) + static_cast<int64_t>(kSteadyEpochNs) + s.internal_ns + s.test_ns;
 }
@@ -163,7 +181,7 @@ struct Now {
 };
 Now now_of(const State& s) {
     Now n{};
-    n.host = host_unix_now();
+    n.host = static_cast<int64_t>(std::floor(base_now(s)));
     n.steady = steady_secs(s);
     return n;
 }
@@ -650,7 +668,168 @@ void register_time() {
 void time_reset() {
     std::lock_guard<std::mutex> lk(mu());
     State& s = raw_state();
+    s.clock = ClockConfig{};
+    s.anchor = clockm::Anchor{};
+    s.state_path.clear();
+    s.saved_guest = 0;
+    s.saved_mono = s.last_shm_mono = 0;
     if (s.created) init_locked(s);
 }
 
+namespace {
+
+constexpr uint64_t kShmRefreshNs = 250'000'000ull;   // a fast clock's shared memory contexts are at most this old
+
+// Writes the state file (Custom mode with a path): temp file, then a rename over the old one, so a crash never leaves half a file.
+void write_state_locked(State& s) {
+    if (!s.clock.custom || s.state_path.empty()) return;
+    const uint64_t mono = raw_ticks_ns();
+    const double guest = base_now(s);
+    clockm::State st;
+    st.guest = static_cast<int64_t>(std::floor(guest));
+    st.host = host_unix_now();
+    st.start = s.clock.start;
+    st.saved_at = s.clock.saved_at;
+    namespace fs = std::filesystem;
+    const std::string tmp = s.state_path + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out << clockm::format_state(st);
+        out.flush();
+        if (!out) return;
+    }
+    std::error_code ec;
+    fs::rename(tmp, fs::path(s.state_path), ec);   // replaces an existing file on Windows
+    if (ec) {
+        fs::remove(tmp, ec);
+        return;
+    }
+    s.saved_guest = guest;
+    s.saved_mono = mono;
+}
+
+bool read_state(const std::string& path, clockm::State* out) {
+    if (path.empty()) return false;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return clockm::parse_state(ss.str(), out);
+}
+
+void anchor_locked(State& s, double game) {
+    const uint64_t mono = raw_ticks_ns();
+    s.anchor = clockm::Anchor{game, mono, clockm::speed_of(s.clock.day_minutes)};
+    s.saved_guest = game;
+    s.saved_mono = mono;
+    s.last_shm_mono = mono;
+    if (s.created) write_shm(s);
+}
+
+// The device rule without bringing the service up: before the first use, [time] zone decides as init_locked will.
+const uint8_t* local_rule(State& s) {
+    ensure_hosts(s);
+    const bool utc = s.created ? s.device_utc : ascii_lower(config_get_str("time", "zone", "host")) == "utc";
+    return utc ? s.utc_rule.data() : s.host_rule.data();
+}
+
+int days_in(int year, int month) {
+    static constexpr int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return month == 2 && leap ? 29 : kDays[month - 1];
+}
+
+// ---- nxrt/clock.h -----------------------------------------------------------------------------------------------------------------
+void clock_start_impl(const ClockConfig& c, const std::string& state_path) {
+    std::lock_guard<std::mutex> lk(mu());
+    State& s = raw_state();
+    s.clock = c;
+    s.state_path = state_path;
+    clockm::State st;
+    const bool have = read_state(state_path, &st);
+    anchor_locked(s, c.custom ? clockm::resume(c, &st, have, host_unix_now()) : 0.0);
+    write_state_locked(s);
+}
+
+void clock_apply_impl(const ClockConfig& c) {
+    std::lock_guard<std::mutex> lk(mu());
+    State& s = raw_state();
+    const ClockConfig old = s.clock;
+    if (old == c) return;
+    double game = 0;
+    if (c.custom) {
+        const bool saved = !old.custom || old.start != c.start || old.saved_at != c.saved_at;
+        game = saved ? static_cast<double>(c.start) : base_now(s);   // a Save restarts from its date; the other changes keep the time
+    }
+    s.clock = c;
+    anchor_locked(s, game);
+    write_state_locked(s);
+}
+
+void clock_tick_impl() {
+    std::lock_guard<std::mutex> lk(mu());
+    State& s = raw_state();
+    if (!s.clock.custom) return;
+    const uint64_t mono = raw_ticks_ns();
+    if (s.created && s.anchor.speed > 1.0 && mono - s.last_shm_mono >= kShmRefreshNs) {
+        write_shm(s);
+        s.last_shm_mono = mono;
+    }
+    if (clockm::should_save(base_now(s), s.saved_guest, mono, s.saved_mono)) write_state_locked(s);
+}
+
+void clock_flush_impl() {
+    std::lock_guard<std::mutex> lk(mu());
+    write_state_locked(raw_state());
+}
+
+int64_t clock_guest_now_impl() {
+    std::lock_guard<std::mutex> lk(mu());
+    const State& s = raw_state();
+    return static_cast<int64_t>(std::floor(base_now(s))) + (s.created ? s.local_delta : 0);
+}
+
+int64_t clock_host_now_impl() { return host_unix_now(); }
+
+bool clock_to_local_impl(int64_t posix, LocalTime* out) {
+    std::lock_guard<std::mutex> lk(mu());
+    tz::CalendarTime cal{};
+    tz::CalendarAdditionalInfo info{};
+    if (!tz::to_calendar(local_rule(raw_state()), posix, &cal, &info)) return false;
+    out->year = cal.year, out->month = cal.month, out->day = cal.day;
+    out->hour = cal.hour, out->minute = cal.minute, out->second = cal.second;
+    out->weekday = static_cast<int>(info.day_of_week);
+    return true;
+}
+
+bool clock_from_local_impl(const LocalTime& t, int64_t* posix) {
+    if (t.year < 2000 || t.year > 2099 || t.month < 1 || t.month > 12 || t.day < 1 || t.day > days_in(t.year, t.month)) return false;
+    if (t.hour < 0 || t.hour > 23 || t.minute < 0 || t.minute > 59 || t.second < 0 || t.second > 59) return false;
+    tz::CalendarTime cal{};
+    cal.year = static_cast<int16_t>(t.year);
+    cal.month = static_cast<int8_t>(t.month), cal.day = static_cast<int8_t>(t.day);
+    cal.hour = static_cast<int8_t>(t.hour), cal.minute = static_cast<int8_t>(t.minute), cal.second = static_cast<int8_t>(t.second);
+    std::lock_guard<std::mutex> lk(mu());
+    int64_t found[2] = {};
+    const int n = tz::to_posix(local_rule(raw_state()), cal, found);
+    if (n <= 0) return false;
+    *posix = n == 2 ? std::min(found[0], found[1]) : found[0];
+    return true;
+}
+
+}  // namespace
+
 }  // namespace nxrt::services
+
+namespace nxrt {
+
+void clock_start(const ClockConfig& c, const std::string& state_path) { services::clock_start_impl(c, state_path); }
+void clock_apply(const ClockConfig& c) { services::clock_apply_impl(c); }
+void clock_tick() { services::clock_tick_impl(); }
+void clock_flush() { services::clock_flush_impl(); }
+int64_t clock_guest_now() { return services::clock_guest_now_impl(); }
+int64_t clock_host_now() { return services::clock_host_now_impl(); }
+bool clock_to_local(int64_t posix, LocalTime* out) { return services::clock_to_local_impl(posix, out); }
+bool clock_from_local(const LocalTime& t, int64_t* posix) { return services::clock_from_local_impl(t, posix); }
+
+}  // namespace nxrt

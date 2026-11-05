@@ -6,6 +6,7 @@
 // The settings are the [clock] section of controls.ini (play mode); the clock's position between runs is a small state file next to it.
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace nxrt {
 
@@ -22,5 +23,16 @@ struct LocalTime {              // a calendar time under the device time zone ru
     int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;   // month 1..12
     int weekday = 0;            // 0 = Sunday
 };
+
+// All thread safe (services/time.cpp holds the state). None of them brings the time services up, so play mode may call them first.
+void clock_start(const ClockConfig& c, const std::string& state_path);   // once at play start: reads the state file, anchors the clock
+void clock_apply(const ClockConfig& c);     // new settings: re-anchors (a Save restarts from its date, other changes keep the time)
+void clock_tick();                          // every frame: refreshes the shared memory of a fast clock, writes the state file when due
+void clock_flush();                         // at exit: writes the state file (Custom mode)
+int64_t clock_guest_now();                  // what the game's user clock says now (posix seconds)
+int64_t clock_host_now();                   // the PC clock (posix seconds)
+bool clock_to_local(int64_t posix, LocalTime* out);         // under the device time zone rule ([time] zone)
+// False for a field out of range, a year outside 2000..2099 or a local time the zone skips (DST); an ambiguous one gives the earlier.
+bool clock_from_local(const LocalTime& t, int64_t* posix);
 
 }  // namespace nxrt

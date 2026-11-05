@@ -7,10 +7,15 @@
 // Tests whose name ends in `_needs_tz` depend on src/services/timezone.cpp (tz::to_calendar / tz::to_posix); on a branch where that
 // file is still the placeholder they fail for that reason only.
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <thread>
 #include <cstring>
 #include <vector>
 
 #include "../src/services/timezone.h"
+#include "nxrt/clock.h"
 #include "nxrt/config.h"
 #include "nxrt/services.h"
 #include "svc_test_util.h"
@@ -478,4 +483,154 @@ NXTEST(svc_time_operation_event_handles) {
     nxsvc::Reply tev = zone.call(20);                   // GetDeviceLocationNameOperationEventReadableHandle
     REQUIRE(tev.ok());
     CHECK_EQ(tev.copy.size(), 1u);
+}
+
+// ---- the custom guest clock (nxrt/clock.h, the F1 Date and Time tab) ------------------------------------------------------------
+namespace {
+
+constexpr int64_t k2030 = 1893456000;   // 2030-01-01T00:00:00Z
+
+int64_t user_now(nxsvc::Session& st) {
+    nxsvc::Session clock = st.sub(st.call(0));
+    return clock.call(0).get<int64_t>(0);
+}
+
+std::string temp_state_path(const char* name) {
+    const char* dir = std::getenv("TEMP");
+    return std::string(dir ? dir : ".") + "\\" + name;
+}
+
+ClockConfig custom_2030(int day_minutes = 1440) {
+    ClockConfig c;
+    c.custom = true;
+    c.start = k2030;
+    c.saved_at = 1;
+    c.day_minutes = day_minutes;
+    return c;
+}
+
+int64_t local_ctx_time(const uint8_t* base) {   // offset + time point of the live local context: the guest time when it was written
+    const uint8_t* c = live_slot(base, 0x38, 4, 0x20);
+    int64_t offset = 0, tp = 0;
+    std::memcpy(&offset, c, 8);
+    std::memcpy(&tp, c + 8, 8);
+    return offset + tp;
+}
+
+}  // namespace
+
+NXTEST(svc_time_clock_system_matches_host) {
+    nxsvc::Env env;
+    clock_apply(ClockConfig{});
+    nxsvc::Session st = nxsvc::connect("time:u");
+    CHECK(abs64(user_now(st) - host_unix()) <= 2);
+}
+
+NXTEST(svc_time_clock_custom_start) {
+    nxsvc::Env env;
+    clock_apply(custom_2030());
+    nxsvc::Session st = nxsvc::connect("time:u");
+    CHECK(abs64(user_now(st) - k2030) <= 1);
+    CHECK(abs64(clock_guest_now() - k2030) <= 1);
+}
+
+NXTEST(svc_time_clock_custom_speed) {
+    nxsvc::Env env;
+    clock_apply(custom_2030(1));   // 1440x
+    nxsvc::Session st = nxsvc::connect("time:u");
+    const int64_t a = user_now(st);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const int64_t d = user_now(st) - a;
+    CHECK_MSG(d >= 140 && d <= 260, "advanced " + std::to_string(d) + " s in 100 ms");
+}
+
+NXTEST(svc_time_clock_network_follows) {
+    nxsvc::Env env;
+    clock_apply(custom_2030());
+    nxsvc::Session st = nxsvc::connect("time:s");
+    nxsvc::Session network = st.sub(st.call(1));
+    CHECK(abs64(network.call(0).get<int64_t>(0) - user_now(st)) <= 1);
+}
+
+NXTEST(svc_time_clock_shm_matches_ipc) {
+    nxsvc::Env env;
+    nxsvc::Session st = nxsvc::connect("time:u");
+    const uint8_t* base = shm_of(st);
+    REQUIRE(base != nullptr);
+    clock_apply(custom_2030(1));
+    int64_t prev = local_ctx_time(base);
+    CHECK(abs64(prev - k2030) <= 2);
+    for (int i = 0; i < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        clock_tick();
+        const int64_t now = local_ctx_time(base);
+        CHECK(now >= prev);
+        CHECK(abs64(now - user_now(st)) <= 600);   // 250 ms x 1440 = 360 s, plus scheduling slack
+        prev = now;
+    }
+    CHECK(prev > k2030 + 300);   // the context moved with the fast clock
+}
+
+NXTEST(svc_time_clock_day_change_continuous) {
+    nxsvc::Env env;
+    clock_apply(custom_2030(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const int64_t before = clock_guest_now();
+    clock_apply(custom_2030(1440));
+    CHECK(before > k2030 + 30);
+    CHECK(clock_guest_now() >= before);
+}
+
+NXTEST(svc_time_clock_state_persist_keep_off) {
+    const std::string path = temp_state_path("nxrt_clock_state_test.ini");
+    std::remove(path.c_str());
+    int64_t flushed = 0;
+    {
+        nxsvc::Env env;
+        clock_start(custom_2030(1), path);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        clock_flush();
+        flushed = clock_guest_now();
+    }
+    nxsvc::Env env;
+    clock_start(custom_2030(1), path);
+    CHECK_MSG(abs64(clock_guest_now() - flushed) <= 2, "resumed at " + std::to_string(clock_guest_now()) + ", flushed " + std::to_string(flushed));
+    CHECK(flushed > k2030 + 30);
+    std::remove(path.c_str());
+}
+
+NXTEST(svc_time_clock_state_garbage) {
+    const std::string path = temp_state_path("nxrt_clock_state_garbage.ini");
+    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+        std::fputs("\x01junk", f);
+        std::fclose(f);
+    }
+    nxsvc::Env env;
+    clock_start(custom_2030(), path);
+    nxsvc::Session st = nxsvc::connect("time:u");
+    CHECK(abs64(user_now(st) - k2030) <= 1);
+    std::remove(path.c_str());
+}
+
+NXTEST(svc_time_clock_local_round_trip_needs_tz) {
+    nxsvc::Env env;
+    ConfigGuard guard;
+    config_clear();
+    config_set("time", "zone", "UTC");
+    nxrt::services::reset_all();
+    LocalTime t;
+    t.year = 2050, t.month = 6, t.day = 15, t.hour = 12, t.minute = 30;
+    int64_t posix = 0;
+    REQUIRE(clock_from_local(t, &posix));
+    CHECK_EQ(posix, 2538909000ll);
+    LocalTime back;
+    REQUIRE(clock_to_local(posix, &back));
+    CHECK(back.year == 2050 && back.month == 6 && back.day == 15 && back.hour == 12 && back.minute == 30 && back.second == 0);
+    CHECK_EQ(back.weekday, 3);   // Wednesday
+    LocalTime bad = t;
+    bad.month = 2, bad.day = 31, bad.year = 2026;
+    CHECK(!clock_from_local(bad, &posix));
+    bad = t;
+    bad.year = 1999;
+    CHECK(!clock_from_local(bad, &posix));
 }
