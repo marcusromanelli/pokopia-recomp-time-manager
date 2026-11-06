@@ -385,6 +385,7 @@ bool apply_fixed(Sec sec, const std::string& k, const std::string& v, Settings* 
                 }
                 return true;
             }
+            if (k == "swap_abxy") return set_bool(&s->prompts.swap_abxy);
             break;
         case Sec::Fps:
             if (k == "show") return set_bool(&s->fps.show);
@@ -1020,6 +1021,7 @@ std::string format_settings(const Settings& s) {
     kv("gamma", num_exact(s.extras.picture.gamma));
     o += "\n[prompts]\n";
     kv("style", prompt_style_name(s.prompts.style));
+    kv("swap_abxy", flag(s.prompts.swap_abxy));
 
     o += "\n[fps]\n";
     kv("show", flag(s.fps.show));

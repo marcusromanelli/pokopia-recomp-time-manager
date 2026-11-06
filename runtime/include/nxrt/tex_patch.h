@@ -28,6 +28,8 @@ bool guest_texture_info(const void* guest, GuestTexInfo* out);
 // Both mark the texture written by the CPU, so it is uploaded again before its next use. False: not such a texture or a bad rectangle.
 bool texture_patch_bc7(const void* guest, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t* rgba, std::vector<uint8_t>* saved);
 bool texture_put_bc7_blocks(const void* guest, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t* blocks, size_t size);
+// The BC7 blocks there now, in the same layout as `saved` above (for texture_put_bc7_blocks, also into another rectangle of the same size).
+bool texture_read_bc7_rect(const void* guest, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint8_t>* blocks);
 
 // A texture known by its content: a w x h (level 0) BC7 texture whose blocks in the rectangle (x, y, w, h) of level 0 (multiples of 4) hash
 // to `hash` (FNV-1a 64 over the rectangle's 16-byte blocks, row by row, as untiled). For a texture the game loads from its files (no pointer
