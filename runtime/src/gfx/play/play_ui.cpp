@@ -489,10 +489,6 @@ void prompts_row(const LiveStatus& live, Page& p) {
         ImGui::SameLine();
         ImGui::TextDisabled("showing %s", cstr(live.prompt_now));
     }
-    if (ImGui::Checkbox("Swap A/B and X/Y icons", &prompts.swap_abxy)) mark(p);
-    tip("For a controller printed with Switch labels on Xbox positions: the Switch icons show B where the game asks for A, A for B, Y for X "
-        "and X for Y, so they match what is printed on the button you press. Only the icons change, not what the buttons do. Applies while "
-        "the Switch icons show.");
 }
 
 void pad_tab(const LiveStatus& live, Page& p) {   // the Gamepad tab of the Controls page

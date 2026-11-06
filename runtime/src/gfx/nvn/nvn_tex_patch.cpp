@@ -177,25 +177,6 @@ bool texture_put_bc7_blocks(const void* guest, uint32_t x, uint32_t y, uint32_t 
     return ok;
 }
 
-bool texture_read_bc7_rect(const void* guest, uint32_t x, uint32_t y, uint32_t w, uint32_t h, std::vector<uint8_t>* blocks) {
-    Texture* t = bc7_texture(guest);
-    if (!t || !blocks) return false;
-    const uint32_t n = rect_levels(t, x, y, w, h);
-    blocks->clear();
-    bool ok = n != 0;
-    for (uint32_t l = 0; l < n && ok; ++l) {
-        const uint32_t lw = w >> l, lh = h >> l, lx = x >> l, ly = y >> l;
-        const size_t row = static_cast<size_t>(lw / 4) * 16;
-        ok = with_level(t, l, lx, ly, lw, lh, false, [&](uint8_t* lin, size_t stride) {
-            for (uint32_t by = 0; by < lh / 4; ++by) {
-                const uint8_t* src = lin + (ly / 4 + by) * stride + static_cast<size_t>(lx / 4) * 16;
-                blocks->insert(blocks->end(), src, src + row);
-            }
-        });
-    }
-    return ok;
-}
-
 bool texture_read_bc7_level(const void* guest, uint32_t level, std::vector<uint8_t>* blocks, uint32_t* width, uint32_t* height) {
     Texture* t = bc7_texture(guest);
     if (!t || !blocks) return false;
