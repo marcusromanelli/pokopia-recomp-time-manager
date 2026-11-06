@@ -231,6 +231,8 @@ const char* prompt_style_name(PromptStyle s);          // "switch" "xbox" "plays
 bool parse_prompt_style(const std::string& s, PromptStyle* out);   // case-insensitive; also accepts ps, ps4, ps5, dualsense, kbm, keyboard_mouse, mouse
 struct PromptSettings {
     PromptStyle style = PromptStyle::Auto;     // follows the last used device: keyboard icons until a pad is used (or when none is connected)
+    bool swap_abxy = false;                    // the Switch icons show B for A, A for B, Y for X and X for Y (a pad printed with Switch labels
+                                               // on Xbox positions: the bottom button, which presses A, says B)
 };
 
 // ---- frame rate counter ------------------------------------------------------------------------------------------------------------
@@ -381,6 +383,7 @@ const char* key_alt_sens();
 //   [picture]  contrast (0.5..1.5) saturation (0..2) black (-0.5..0.25) gamma (0.5..2), neutral 1 1 0 1; preset (neutral vivid) is read, not written
 //   [audio]    volume (0..1) mute_unfocused (1/0) device (default or part of an output device's name)
 //   [prompts]  style = switch|xbox|playstation|keyboard|auto   (which button icons the game's prompts show; auto, the default, follows the last used input device)
+//              swap_abxy (1/0)   (the Switch icons swap A/B and X/Y: for a pad printed with Switch labels on Xbox positions)
 //   [tweaks]   skip_intro skip_boot_logos fast_menus (1/0) menu_speed (1..4)   (play_fastboot.h)
 //              glow_color (off | R,G,B) suit_glow ball_glow gun_glow (auto | off | R,G,B)   (play_tweaks.h)
 //   [fps]      show (1/0) key (a keyboard key, F2) corner (top_left top_right bottom_left bottom_right) detail (0..2) in_screenshots (1/0)

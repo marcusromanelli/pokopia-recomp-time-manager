@@ -1916,3 +1916,19 @@ NXTEST(quality_preset_edit_makes_custom) {
     CHECK(!quality_preset_edited(d, QualityField::LodBias));
     CHECK_EQ(d.quality_preset, std::string("custom"));
 }
+
+// ---- [prompts] swap_abxy: a pad printed with Switch labels on Xbox positions (the Switch style shows B for A, Y for X) --------------
+NXTEST(prompts_swap_abxy_round_trip) {
+    Settings s = default_settings();
+    CHECK(!s.prompts.swap_abxy);
+    s.prompts.swap_abxy = true;
+    const std::string text = format_settings(s);
+    CHECK(text.find("swap_abxy = 1") != std::string::npos);
+    Settings o;
+    std::string err;
+    REQUIRE_MSG(parse_settings(text, &o, &err), err);
+    CHECK(o.prompts.swap_abxy);
+    Settings bad;
+    CHECK(!parse_settings("[prompts]\nswap_abxy = maybe\n", &bad, &err));
+    CHECK(err.find("swap_abxy") != std::string::npos);
+}

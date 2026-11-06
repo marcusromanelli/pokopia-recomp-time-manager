@@ -22,6 +22,8 @@
 //   * xbox / playstation: the same atlas sprites are overwritten with the pad icons of the prompt icon pack
 //     (assets/prompts/prompt_icons.pak: play::prompts_pack(); ps/cross for the button that presses Switch A, following [padmap]
 //     and [pad] label_abxy), so the prompts show the controller's own buttons instead of the game's Switch glyphs.
+//   * switch with [prompts] swap_abxy: the game's own A and B sprites trade places, and so do X and Y (their original BC7 blocks are
+//     copied into each other's rectangle), for a pad printed with Switch labels on Xbox positions. The title art's A disc stays.
 // The sprites are also looked up from the frame hook (pkp_play.cpp) once the sprite sheets are loaded, so the title screen and the HUD,
 // which draw them without a text tag, show the icons before the first tag.
 // The title screen's "PRESS (A) BUTTON" is not text: it is part of the title logo texture (a 1024x1024 BC7 texture loaded with the title
@@ -87,9 +89,23 @@ struct Glyph {
     bool tried = false;        // the sprite was looked up (found or not)
     uint64_t tex = 0;          // the game's NVNtexture of the atlas, 0 = not found
     uint32_t x = 0, y = 0, w = 0, h = 0;
-    std::string shown;         // the icon written there now, "" = the game's own pixels
+    std::string shown;         // the icon written there now, "" = the game's own pixels ("@game:<slot>": that slot's original sprite)
     std::vector<uint8_t> saved;
+    std::vector<uint8_t> orig; // the game's own blocks of this sprite (read when it is found; texture_put_bc7_blocks layout)
 };
+
+// The face buttons' slots and the slot whose original sprite each shows with [prompts] swap_abxy: A <-> B, X <-> Y.
+constexpr int kSlotY = 4, kSlotA = 5, kSlotX = 6, kSlotB = 7;
+int swap_partner(int slot) {
+    switch (slot) {
+        case kSlotA: return kSlotB;
+        case kSlotB: return kSlotA;
+        case kSlotX: return kSlotY;
+        case kSlotY: return kSlotX;
+        default: return -1;
+    }
+}
+constexpr const char* kGameIcon = "@game:";   // Want::icon prefix: another slot's original sprite
 
 struct Image {
     bool tried = false;
@@ -505,6 +521,8 @@ bool resolve_code(::Ctx* c, State& s, uint32_t code, uint32_t action) {
     NXLOG_I(kTag, "kbm prompt %s (code %u): sprite %s %ux%u at (%u, %u) of texture #%u (%ux%u, %u levels)%s", kSlotName[slot], code, name, g.w,
             g.h, g.x, g.y, ti.id, ti.width, ti.height, ti.levels, ok ? "" : ", not 4x4 aligned: text only");
     if (!ok) g.tex = 0;
+    // the game's own pixels, before anything is written there (swap_abxy shows them in the partner's rectangle)
+    else if (!gfx::texture_read_bc7_rect(reinterpret_cast<const void*>(g.tex), g.x, g.y, g.w, g.h, &g.orig)) g.orig.clear();
     return true;
 }
 
@@ -555,6 +573,9 @@ void compute_want_locked(State& s) {
                 break;
             }
         }
+    } else if (eff == play::PromptStyle::Switch && s.settings.prompts.swap_abxy) {
+        // the game's own A/B and X/Y sprites trade places (the partner's original blocks); the rest keep the game's
+        for (int i : {kSlotY, kSlotA, kSlotX, kSlotB}) want[i].icon = kGameIcon + std::to_string(swap_partner(i));
     } else if (eff == play::PromptStyle::Xbox || eff == play::PromptStyle::PlayStation) {
         // the pad's own button that presses each Switch button, following [padmap] and [pad] label_abxy; the stick clicks and the
         // stick glyphs have no pad icon and keep the game's own
@@ -569,19 +590,39 @@ void compute_want_locked(State& s) {
 // Puts the wanted icon (or the game's pixels) into every glyph that was found. Caller holds s.mu.
 void sync_glyphs_locked(State& s) {
     compute_want_locked(s);
-    const bool patch = s.enabled && s.eff != play::PromptStyle::Switch;
+    const bool patch = s.enabled && (s.eff != play::PromptStyle::Switch || s.settings.prompts.swap_abxy);
     for (int i = 0; i < kSlots; ++i) {
         Glyph& g = s.glyph[i];
         if (!g.tex) continue;
         std::string target = patch ? s.want[i].icon : std::string();
-        if (!target.empty() && !have_icon_locked(s, target)) target.clear();
+        const Glyph* from = nullptr;   // a "@game:" target: the slot whose original sprite goes here (same size, its blocks read)
+        if (target.rfind(kGameIcon, 0) == 0) {
+            const int src = std::atoi(target.c_str() + std::strlen(kGameIcon));
+            from = src >= 0 && src < kSlots ? &s.glyph[src] : nullptr;
+            if (!from || !from->tex || from->orig.empty() || g.orig.empty() || from->w != g.w || from->h != g.h) {
+                from = nullptr;
+                target.clear();   // the partner is not found yet (or another size): the game's own glyph for now
+            }
+        } else if (!target.empty() && !have_icon_locked(s, target)) {
+            target.clear();
+        }
         if (target == g.shown) continue;
         const void* tex = reinterpret_cast<const void*>(g.tex);
         if (!g.shown.empty()) {
             gfx::texture_put_bc7_blocks(tex, g.x, g.y, g.w, g.h, g.saved.data(), g.saved.size());
             g.shown.clear();
         }
-        if (!target.empty()) {
+        if (from) {
+            if (gfx::texture_put_bc7_blocks(tex, g.x, g.y, g.w, g.h, from->orig.data(), from->orig.size())) {
+                g.saved = g.orig;   // what goes back when the swap is turned off
+                g.shown = target;
+                s.patches.fetch_add(1, std::memory_order_relaxed);
+                NXLOG_I(kTag, "kbm prompt %s: the game's %s glyph", kSlotName[i], kSlotName[from - s.glyph.data()]);
+            } else {
+                NXLOG_W(kTag, "kbm prompt %s: the atlas patch failed", kSlotName[i]);
+                g.tex = 0;
+            }
+        } else if (!target.empty()) {
             const std::vector<uint8_t> px = pixels_locked(s, target, g.w, g.h);
             if (gfx::texture_patch_bc7(tex, g.x, g.y, g.w, g.h, px.data(), &g.saved)) {
                 g.shown = target;
@@ -658,7 +699,8 @@ void frame(::Ctx* c) {
     {
         std::lock_guard<std::mutex> lk(s.mu);
         bool ready = s.all_resolved;
-        if (!ready && eff != play::PromptStyle::Switch && s.frame_tries < 400) {
+        const bool patching = eff != play::PromptStyle::Switch || s.settings.prompts.swap_abxy;
+        if (!ready && patching && s.frame_tries < 400) {
             const uint64_t mgr = rd<uint64_t>(s.base + kInputMgr);
             if (mgr && rd<uint64_t>(s.base + kDataMgr) && rd<uint64_t>(s.base + kUiMgr)) {
                 ++s.frame_tries;
